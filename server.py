@@ -51,8 +51,6 @@ class Command(Base):
 Base.metadata.create_all(bind=engine)
 
 
-
-
 #---------MODELOS Pydantic--------
 class MachineRegister(BaseModel):
     id: str
@@ -121,9 +119,27 @@ def execute_script(data: ExecuteRequest):
 @app.get("/commands/{machine_id}")
 def get_pending_commands(machine_id: str):
     session = SessionLocal()
-    cmds = session.query(Command).filter_by(machine_id=machine_id, status="pending").all()
+    
+    #Faz um JOIN entre Command e Script para obter o conteúdo (content)
+    #necessário para o agente executar o comando.
+    cmds = session.query(
+        Command.id, 
+        Command.script_name, 
+        Script.content
+    ).join(
+        Script, Command.script_name == Script.name
+    ).filter(
+        Command.machine_id == machine_id, 
+        Command.status == "pending"
+    ).all()
+    
     session.close()
-    return [{"id": c.id, "script_name": c.script_name} for c in cmds]
+    
+    # Retorna uma lista de dicionários com os campos necessários
+    return [
+        {"id": c.id, "script_name": c.script_name, "content": c.content} 
+        for c in cmds
+    ]
 
 @app.post("/commands/{command_id}/result")
 def post_command_result(command_id: int, result: CommandResult):
