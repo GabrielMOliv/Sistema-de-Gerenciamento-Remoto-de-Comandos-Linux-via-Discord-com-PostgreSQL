@@ -1,31 +1,42 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, Text, ForeignKey
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
-from datetime import datetime, timedelta
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
+from datetime import datetime
 import os
-from dotenv import load_dotenv
 
-# Carrega variáveis do .env e força o caminho
-from pathlib import Path
-dotenv_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=dotenv_path)
-
-# Mostra se foi carregado e oq foi carregado
-print("Arquivo .env carregado de:", dotenv_path)
-print("DATABASE_URL =", os.getenv("DATABASE_URL"))
+# --- CONEXÃO E CONFIGURAÇÃO DA RAILWAY ---
+# 1. REMOÇÃO DA LÓGICA DE .ENV: O Railway já injeta DATABASE_URL.
+#    Confiamos apenas no ambiente (os.getenv).
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-#Conexão PostgreSQL
+# VERIFICAÇÃO DE SEGURANÇA: Garante que a URL foi carregada
+if not DATABASE_URL:
+    # Se o servidor não conseguir iniciar, ele falha com uma mensagem clara.
+    raise RuntimeError("DATABASE_URL não configurada. O servidor não pode iniciar.")
+
+# 2. Conexão PostgreSQL
 engine = create_engine(DATABASE_URL)
 print(f"Usando Banco: {DATABASE_URL}")
-SessionLocal = sessionmaker(bind=engine)
+
+# Configuração da Sessão
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 app = FastAPI(title="Linux Remote Manager")
 
-#----------MODELOS----------
+# 3. FUNÇÃO DE INJEÇÃO DE DEPENDÊNCIA (Gerenciamento Seguro da Sessão)
+def get_db():
+    db = SessionLocal()
+    try:
+        # Fornece a sessão para o endpoint
+        yield db
+    finally:
+        # Garante que a sessão é fechada, mesmo que ocorra um erro no endpoint.
+        db.close()
+
+# ----------------- MODELOS (SEM MUDANÇA) -----------------
 class Machine(Base):
     __tablename__ = "machines"
     id = Column(String, primary_key=True)
@@ -47,9 +58,7 @@ class Command(Base):
     machine = relationship("Machine")
     script = relationship("Script")
 
-#Base.metadata.create_all(bind=engine)
-
-#---------MODELOS Pydantic--------
+# ... (Seus Pydantic Models não foram alterados) ...
 class MachineRegister(BaseModel):
     id: str
     name: str
@@ -65,62 +74,50 @@ class ExecuteRequest(BaseModel):
 class CommandResult(BaseModel):
     output: str
 
+# ---------- ENDPOINTS (USANDO DEPENDS) ----------
 
-
-#----------ENDPOINTS----------
 @app.get("/machines")
-def list_machines():
-    session = SessionLocal()
+def list_machines(db: Session = Depends(get_db)):
     five_minutes_ago = int(datetime.utcnow().timestamp()) - 300
-    machines = session.query(Machine).filter(Machine.last_seen >= five_minutes_ago).all()
-    session.close()
+    machines = db.query(Machine).filter(Machine.last_seen >= five_minutes_ago).all()
     return [{"id": m.id, "name": m.name, "last_seen": m.last_seen} for m in machines]
 
 @app.post("/register_machine")
-def register_machine(data: MachineRegister):
-    session = SessionLocal()
-    machine = session.query(Machine).filter_by(id=data.id).first()
+def register_machine(data: MachineRegister, db: Session = Depends(get_db)):
+    machine = db.query(Machine).filter_by(id=data.id).first()
     now = int(datetime.utcnow().timestamp())
     if machine:
         machine.last_seen = now
         machine.name = data.name
     else:
-        session.add(Machine(id=data.id, name=data.name, last_seen=now))
-    session.commit()
-    session.close()
+        db.add(Machine(id=data.id, name=data.name, last_seen=now))
+    db.commit()
     return {"status": "ok", "message": f"Machine {data.name} registered"}
 
 @app.post("/scripts")
-def register_script(data: ScriptRegister):
-    session = SessionLocal()
-    script = session.query(Script).filter_by(name=data.name).first()
+def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
+    script = db.query(Script).filter_by(name=data.name).first()
     if script:
         raise HTTPException(status_code=400, detail="Script name already exists")
-    session.add(Script(name=data.name, content=data.content))
-    session.commit()
-    session.close()
+    db.add(Script(name=data.name, content=data.content))
+    db.commit()
     return {"status": "ok", "message": f"Script {data.name} registered"}
 
 @app.post("/execute")
-def execute_script(data: ExecuteRequest):
-    session = SessionLocal()
-    machine = session.query(Machine).filter_by(id=data.machine_id).first()
-    script = session.query(Script).filter_by(name=data.script_name).first()
+def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
+    machine = db.query(Machine).filter_by(id=data.machine_id).first()
+    script = db.query(Script).filter_by(name=data.script_name).first()
     if not machine or not script:
         raise HTTPException(status_code=404, detail="Machine or script not found")
     cmd = Command(machine_id=machine.id, script_name=script.name)
-    session.add(cmd)
-    session.commit()
-    session.close()
+    db.add(cmd)
+    db.commit()
     return {"status": "ok", "message": f"Command created for {machine.name}"}
 
 @app.get("/commands/{machine_id}")
-def get_pending_commands(machine_id: str):
-    session = SessionLocal()
-    
-    #Faz um JOIN entre Command e Script para obter o conteúdo (content)
-    #necessário para o agente executar o comando.
-    cmds = session.query(
+def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
+    # Faz um JOIN entre Command e Script para obter o conteúdo (content)
+    cmds = db.query(
         Command.id, 
         Command.script_name, 
         Script.content
@@ -131,23 +128,17 @@ def get_pending_commands(machine_id: str):
         Command.status == "pending"
     ).all()
     
-    session.close()
-    
-    # Retorna uma lista de dicionários com os campos necessários
     return [
         {"id": c.id, "script_name": c.script_name, "content": c.content} 
         for c in cmds
     ]
 
 @app.post("/commands/{command_id}/result")
-def post_command_result(command_id: int, result: CommandResult):
-    session = SessionLocal()
-    cmd = session.query(Command).filter_by(id=command_id).first()
+def post_command_result(command_id: int, result: CommandResult, db: Session = Depends(get_db)):
+    cmd = db.query(Command).filter_by(id=command_id).first()
     if not cmd:
         raise HTTPException(status_code=404, detail="Command not found")
     cmd.status = "completed"
     cmd.output = result.output
-    session.commit()
-    session.close()
+    db.commit()
     return {"status": "ok", "message": "Result saved"}
-
