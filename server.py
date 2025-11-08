@@ -106,17 +106,16 @@ def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok", "message": f"Script {data.name} registered"}
 
-@app.post("/execute")
+app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
-    # 1. Busca a máquina pelo ID (robusta)
+    # Certifique-se que o ID da Máquina está sendo lido corretamente
     machine = db.query(Machine).filter_by(id=data.machine_id).first()
     
-    # 2. CORREÇÃO: Busca o script de forma insensível à capitalização (ILike)
-    # Isso garante que "teste-check" ou "Teste-Check" funcionem
-    script = db.query(Script).filter(Script.name.ilike(data.script_name)).first()
+    # Busca do Script (Voltamos ao original)
+    script = db.query(Script).filter_by(name=data.script_name).first()
     
-    # Se a busca não encontrou nenhum dos dois, retorna 404
     if not machine or not script:
+        # Este erro é disparado!
         raise HTTPException(status_code=404, detail="Machine or script not found")
         
     # Resto do código (cria o comando, commita e retorna sucesso)

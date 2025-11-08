@@ -76,7 +76,7 @@ async def execute_script(ctx, machine_id: str, script_name: str):
             else:
                 # Erro (ex: Máquina ou script não encontrado)
                 error_detail = data.get('detail', 'Erro desconhecido na execução.')
-                await ctx.send(f"❌ Falha na execução: {error_detail}")
+                await ctx.send(f" Falha na execução: {error_detail}")
 
 @bot.event
 async def on_ready():
