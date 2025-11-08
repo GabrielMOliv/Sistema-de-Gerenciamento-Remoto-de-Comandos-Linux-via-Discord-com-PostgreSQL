@@ -47,9 +47,7 @@ class Command(Base):
     machine = relationship("Machine")
     script = relationship("Script")
 
-# Cria as tabelas no banco
-Base.metadata.create_all(bind=engine)
-
+#Base.metadata.create_all(bind=engine)
 
 #---------MODELOS Pydantic--------
 class MachineRegister(BaseModel):
