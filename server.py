@@ -17,7 +17,10 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL não configurada. O servidor não pode iniciar.")
 
 # 2. Conexão PostgreSQL
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"sslmode": "require"}
+)
 print(f"Usando Banco: {DATABASE_URL}")
 
 # Configuração da Sessão
