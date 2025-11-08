@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Carrega variáveis de ambiente
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SERVER_URL = os.getenv("SERVER_URL")  #http://127.0.0.1:8000
+SERVER_URL = os.getenv("SERVER_URL")
 AUTHORIZED_USERS = [int(x) for x in os.getenv("AUTHORIZED_USERS", "").split(",")]
 
 # Inicializa bot
@@ -57,22 +57,26 @@ async def register_script(ctx, name: str, *, content: str):
 
 @bot.command()
 @is_authorized()
-async def execute_script(ctx, machine_name: str, script_name: str):
-    # Primeiro, precisamos obter o ID da máquina a partir do nome
+async def execute_script(ctx, machine_id: str, script_name: str):
+    """
+    Executa um script em uma máquina específica usando seu ID.
+    O Bot não precisa mais buscar a lista de máquinas.
+    """
+    # 1. Prepara o payload diretamente com o ID e o nome do script
+    payload = {"machine_id": machine_id, "script_name": script_name}
+
+    # 2. Envia a requisição de execução para o servidor
     async with aiohttp.ClientSession() as session:
-        async with session.get(f"{SERVER_URL}/machines") as resp:
-            if resp.status not in (200, 201):
-                await ctx.send("Erro ao consultar o servidor.")
-                return
-            machines = await resp.json()
-            machine = next((m for m in machines if m["name"] == machine_name), None)
-            if not machine:
-                await ctx.send("Máquina não encontrada ou inativa.")
-                return
-            payload = {"machine_id": machine["id"], "script_name": script_name}
-            async with session.post(f"{SERVER_URL}/execute", json=payload) as resp2:
-                data = await resp2.json()
-                await ctx.send(f"{data['message']}")
+        async with session.post(f"{SERVER_URL}/execute", json=payload) as resp:
+            data = await resp.json()
+
+            if resp.status == 200:
+                # Sucesso
+                await ctx.send(f"✅ {data['message']}")
+            else:
+                # Erro (ex: Máquina ou script não encontrado)
+                error_detail = data.get('detail', 'Erro desconhecido na execução.')
+                await ctx.send(f"❌ Falha na execução: {error_detail}")
 
 @bot.event
 async def on_ready():

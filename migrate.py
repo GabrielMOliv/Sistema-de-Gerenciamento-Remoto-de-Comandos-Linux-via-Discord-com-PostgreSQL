@@ -27,5 +27,3 @@ except Exception as e:
     print(f"ERRO DE MIGRACAO FATAL: Falha ao criar tabelas: {e}")
     # Força a saída com código de erro, se algo falhar
     exit(1)
-
-# O script termina aqui com sucesso (código de saída 0)
