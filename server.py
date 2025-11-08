@@ -109,10 +109,10 @@ def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
 @app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
     # Certifique-se que o ID da Máquina está sendo lido corretamente
-    machine = db.query(Machine).filter_by(id=data.machine_id).first()
+    machine = db.query(Machine).filter_by(id=data.id).first()
     
     # Busca do Script (Voltamos ao original)
-    script = db.query(Script).filter_by(name=data.script_name).first()
+    script = db.query(Script).filter_by(name=data.name).first()
     
     if not machine or not script:
         # Este erro é disparado!

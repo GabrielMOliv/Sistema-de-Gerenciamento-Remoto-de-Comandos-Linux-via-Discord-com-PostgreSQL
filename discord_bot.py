@@ -57,13 +57,13 @@ async def register_script(ctx, name: str, *, content: str):
 
 @bot.command()
 @is_authorized()
-async def execute_script(ctx, machine_id: str, script_name: str):
+async def execute_script(ctx, machine_id:str, script_name:str):
     """
     Executa um script em uma máquina específica usando seu ID.
     O Bot não precisa mais buscar a lista de máquinas.
     """
     # 1. Prepara o payload diretamente com o ID e o nome do script
-    payload = {"machine_id": machine_id, "script_name": script_name}
+    payload = {"machine_id":machine_id, "script_name":script_name}
 
     # 2. Envia a requisição de execução para o servidor
     async with aiohttp.ClientSession() as session:
@@ -72,7 +72,7 @@ async def execute_script(ctx, machine_id: str, script_name: str):
 
             if resp.status == 200:
                 # Sucesso
-                await ctx.send(f"✅ {data['message']}")
+                await ctx.send(f"{data['message']}")
             else:
                 # Erro (ex: Máquina ou script não encontrado)
                 error_detail = data.get('detail', 'Erro desconhecido na execução.')
