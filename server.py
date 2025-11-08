@@ -106,7 +106,7 @@ def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok", "message": f"Script {data.name} registered"}
 
-app.post("/execute")
+@app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
     # Certifique-se que o ID da Máquina está sendo lido corretamente
     machine = db.query(Machine).filter_by(id=data.machine_id).first()
