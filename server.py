@@ -48,7 +48,7 @@ class Command(Base):
     script = relationship("Script")
 
 # Cria as tabelas no banco
-Base.metadata.create_all(bind=engine)
+#Base.metadata.create_all(bind=engine)
 
 
 #---------MODELOS Pydantic--------
@@ -152,3 +152,4 @@ def post_command_result(command_id: int, result: CommandResult):
     session.commit()
     session.close()
     return {"status": "ok", "message": "Result saved"}
+
