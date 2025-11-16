@@ -1,1 +1,1 @@
-web: python3 migrate.py
+web: gunicorn server:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
