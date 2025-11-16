@@ -1,75 +1,83 @@
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, ForeignKey, func
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
-from sqlalchemy.exc import SQLAlchemyError
-from datetime import datetime
 import os
+import time
+import uuid
+import subprocess
+from datetime import datetime, timezone
+from typing import List, Dict, Any
 
-# --- CONEXÃO E CONFIGURAÇÃO DA RAILWAY ---
-# 1. REMOÇÃO DA LÓGICA DE .ENV: O Railway já injeta DATABASE_URL.
-#    Confiamos apenas no ambiente (os.getenv).
+from fastapi import FastAPI, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, func
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.exc import SQLAlchemyError
 
+# --- Configuração do Banco de Dados ---
+
+# Obter a URL do DB do ambiente (essencial para Railway)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# VERIFICAÇÃO DE SEGURANÇA: Garante que a URL foi carregada
 if not DATABASE_URL:
-    # Se o servidor não conseguir iniciar, ele falha com uma mensagem clara.
-    raise RuntimeError("DATABASE_URL não configurada. O servidor não pode iniciar.")
+    # Se estiver rodando localmente sem .env, use um valor padrão para testes
+    # Altere esta linha se você não estiver usando PostgreSQL localmente
+    # raise RuntimeError("DATABASE_URL environment variable is not set.")
+    print("AVISO: DATABASE_URL não definida, assumindo SQLite para DEV. NÃO use em produção!")
+    DATABASE_URL = "sqlite:///./sql_app.db"
+    
+# Configuração da Engine
+# connect_args={"sslmode": "require"} é necessário para muitos hosts como Railway
+if "postgres" in DATABASE_URL:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"sslmode": "require"}
+    )
+else: # Para SQLite local
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False}
+    )
 
-# 2. Conexão PostgreSQL
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"sslmode": "require"}
-)
-print(f"Usando Banco: {DATABASE_URL}")
-
-# Configuração da Sessão
+# Criação da Sessão e Base
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-app = FastAPI(title="Linux Remote Manager")
+# --- Modelos SQLAlchemy ---
 
-# 3. FUNÇÃO DE INJEÇÃO DE DEPENDÊNCIA (Gerenciamento Seguro da Sessão)
-def get_db():
-    db = SessionLocal()
-    try:
-        # Fornece a sessão para o endpoint
-        yield db
-    finally:
-        # Garante que a sessão é fechada, mesmo que ocorra um erro no endpoint.
-        db.close()
-
-# -----------------MODELOS-----------------
 class Machine(Base):
     __tablename__ = "machines"
-    id = Column(String, primary_key=True)
-    name = Column(String)
-    last_seen = Column(Integer)
+    # O ID é definido pelo agente, não gerado pelo DB
+    id = Column(String, primary_key=True, index=True) 
+    name = Column(String, index=True)
+    # last_seen armazena um timestamp Unix
+    last_seen = Column(Float, default=time.time) 
 
 class Script(Base):
     __tablename__ = "scripts"
-    name = Column(String, primary_key=True)
-    content = Column(Text)
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    content = Column(String)
 
 class Command(Base):
     __tablename__ = "commands"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    machine_id = Column(String, ForeignKey("machines.id"))
-    script_name = Column(String, ForeignKey("scripts.name"))
-    status = Column(String, default="pending")
-    output = Column(Text, default="")
+    id = Column(Integer, primary_key=True, index=True)
+    machine_id = Column(String, index=True)
+    script_name = Column(String)
+    status = Column(String, default="pending") # pending, executing, completed, failed
+    output = Column(String, nullable=True)
+    # Adicionado campo de criação com fuso horário UTC
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+# --- Criação de Tabelas (Garantir que as tabelas existam para testes) ---
+# Em produção, use o migrate.py, mas isto ajuda em testes locais.
+Base.metadata.create_all(bind=engine)
 
-    machine = relationship("Machine")
-    script = relationship("Script")
+# --- Pydantic Schemas ---
 
-class MachineRegister(BaseModel):
+class RegisterMachine(BaseModel):
     id: str
     name: str
 
-class ScriptRegister(BaseModel):
+class ScriptRequest(BaseModel):
     name: str
     content: str
 
@@ -80,34 +88,85 @@ class ExecuteRequest(BaseModel):
 class CommandResult(BaseModel):
     output: str
 
-# ----------ENDPOINTS----------
+class CommandResponse(BaseModel):
+    id: int
+    machine_id: str
+    script_name: str
+    status: str
+    output: str | None
+    created_at: datetime
+
+# --- Inicialização do FastAPI ---
+
+app = FastAPI(
+    title="Remote Linux Command Manager",
+    description="Backend para gerenciamento de comandos remotos via Discord."
+)
+
+# Dependência para obter a sessão do DB
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- Funções de Segurança ---
+
+DANGEROUS_COMMANDS = ["rm -rf", "shutdown", "reboot", "poweroff", "mkfs", "dd", "chmod 777"]
+
+def check_for_dangerous_commands(content: str):
+    content_lower = content.lower()
+    for cmd in DANGEROUS_COMMANDS:
+        if cmd in content_lower:
+            return True
+    return False
+
+# --- Endpoints ---
+
+@app.post("/register_machine")
+def register_machine(data: RegisterMachine, db: Session = Depends(get_db)):
+    # 1. Atualiza o timestamp se a máquina já existe
+    machine = db.query(Machine).filter_by(id=data.id).first()
+    if machine:
+        # Atualiza apenas last_seen
+        machine.last_seen = time.time()
+        # Se o nome mudou, atualiza também
+        if machine.name != data.name:
+            machine.name = data.name
+        db.commit()
+        return {"status": "updated", "message": f"Machine {data.name} updated."}
+    
+    # 2. Cria uma nova máquina se não existir
+    new_machine = Machine(id=data.id, name=data.name, last_seen=time.time())
+    db.add(new_machine)
+    db.commit()
+    return {"status": "created", "message": f"Machine {data.name} registered."}
 
 @app.get("/machines")
 def list_machines(db: Session = Depends(get_db)):
-    five_minutes_ago = int(datetime.utcnow().timestamp()) - 300
-    machines = db.query(Machine).filter(Machine.last_seen >= five_minutes_ago).all()
+    # Filtra máquinas que fizeram ping nos últimos 5 minutos (300 segundos)
+    timeout = time.time() - 300
+    machines = db.query(Machine).filter(Machine.last_seen >= timeout).all()
+    # Retorna uma lista de dicionários
     return [{"id": m.id, "name": m.name, "last_seen": m.last_seen} for m in machines]
 
-@app.post("/register_machine")
-def register_machine(data: MachineRegister, db: Session = Depends(get_db)):
-    machine = db.query(Machine).filter_by(id=data.id).first()
-    now = int(datetime.utcnow().timestamp())
-    if machine:
-        machine.last_seen = now
-        machine.name = data.name
-    else:
-        db.add(Machine(id=data.id, name=data.name, last_seen=now))
-    db.commit()
-    return {"status": "ok", "message": f"Machine {data.name} registered"}
-
 @app.post("/scripts")
-def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
-    script = db.query(Script).filter_by(name=data.name).first()
-    if script:
-        raise HTTPException(status_code=400, detail="Script name already exists")
-    db.add(Script(name=data.name, content=data.content))
+def register_script(data: ScriptRequest, db: Session = Depends(get_db)):
+    # Checa comandos perigosos
+    if check_for_dangerous_commands(data.content):
+        raise HTTPException(status_code=403, detail="Script content contains dangerous commands.")
+        
+    # Checa se o script já existe (case-insensitive)
+    existing_script = db.query(Script).filter(func.lower(Script.name) == func.lower(data.name)).first()
+    if existing_script:
+        raise HTTPException(status_code=400, detail=f"Script name '{data.name}' already exists.")
+        
+    # Cria novo script
+    new_script = Script(name=data.name, content=data.content)
+    db.add(new_script)
     db.commit()
-    return {"status": "ok", "message": f"Script {data.name} registered"}
+    return {"status": "created", "message": f"Script '{data.name}' registered successfully."}
 
 @app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
@@ -128,8 +187,15 @@ def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
         db.add(cmd)
         db.commit()
         
-        # 3. Sucesso
-        return {"status": "ok", "message": f"Command created for {machine.name}"}
+        # 2c. ATUALIZA O OBJETO COM O ID GERADO PELO BANCO DE DADOS
+        db.refresh(cmd) # <--- OBRIGATÓRIO: Obtém o ID autogerado pelo DB!
+        
+        # 3. Sucesso: Retorna o ID do comando para o Discord Bot
+        return {
+            "status": "ok", 
+            "message": f"Command created for {machine.name}",
+            "command_id": cmd.id # <--- ID real retornado aqui!
+        }
 
     except SQLAlchemyError as e:
         # Captura erros de DB (ex: constraint violation)
@@ -151,32 +217,58 @@ def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
             detail=f"An unexpected server error occurred: {e}"
         )
 
-
+# Endpoint para o Agente buscar comandos
 @app.get("/commands/{machine_id}")
 def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
-    # Faz um JOIN entre Command e Script para obter o conteúdo (content)
-    cmds = db.query(
-        Command.id, 
-        Command.script_name, 
-        Script.content
-    ).join(
-        Script, Command.script_name == Script.name
-    ).filter(
-        Command.machine_id == machine_id, 
-        Command.status == "pending"
-    ).all()
+    # 1. Busca comandos pendentes para a máquina específica
+    pending_commands = db.query(Command).filter_by(
+        machine_id=machine_id, 
+        status="pending"
+    ).order_by(Command.created_at).all()
     
-    return [
-        {"id": c.id, "script_name": c.script_name, "content": c.content} 
-        for c in cmds
-    ]
+    # 2. Converte para uma lista de dicionários com o conteúdo do script
+    commands_to_execute = []
+    for cmd in pending_commands:
+        # Busca o conteúdo do script
+        script = db.query(Script).filter_by(name=cmd.script_name).first()
+        
+        if script:
+            commands_to_execute.append({
+                "id": cmd.id,
+                "script_name": cmd.script_name,
+                "content": script.content 
+            })
+            # Opcional: Mudar status para 'executing' para evitar que outro agente pegue
+            # cmd.status = "executing"
+            
+    db.commit() # Salva a mudança de status (se implementada)
+    return commands_to_execute
 
+# Endpoint para o Agente enviar o resultado
 @app.post("/commands/{command_id}/result")
 def post_command_result(command_id: int, result: CommandResult, db: Session = Depends(get_db)):
+    # 1. Busca o comando
     cmd = db.query(Command).filter_by(id=command_id).first()
+    
     if not cmd:
-        raise HTTPException(status_code=404, detail="Command not found")
+        raise HTTPException(status_code=404, detail="Command not found.")
+        
+    # 2. Atualiza o status e a saída
     cmd.status = "completed"
     cmd.output = result.output
+    
     db.commit()
-    return {"status": "ok", "message": "Result saved"}
+    
+    return {"status": "ok", "message": f"Command {command_id} result saved."}
+
+# Endpoint para o Bot Discord verificar o resultado (NOVO)
+@app.get("/commands/{command_id}", response_model=CommandResponse)
+def get_command_status(command_id: int, db: Session = Depends(get_db)):
+    # 1. Busca o comando
+    cmd = db.query(Command).filter_by(id=command_id).first()
+    
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Command ID not found.")
+        
+    # 2. Retorna o objeto Command, que será serializado pelo Pydantic Response Model
+    return cmd
