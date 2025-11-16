@@ -41,7 +41,7 @@ async def list_machines(ctx):
             if not machines:
                 return await ctx.send("Nenhuma máquina ativa no momento.")
 
-            msg = "📡 **Máquinas Ativas:**\n"
+            msg = "Máquinas Ativas:\n"
             for m in machines:
                 last_seen_dt = datetime.datetime.fromtimestamp(m["last_seen"], tz=datetime.timezone.utc)
                 formatted = last_seen_dt.strftime("%d/%m/%Y %H:%M:%S UTC")
