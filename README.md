@@ -55,12 +55,12 @@ cd bot<br />
 python discord_bot.py<br />
 <br />
 .possuí os comandos:<br />
-!ping_server<br />
-!list_machines<br />
-!list_scripts<br />
-!run_script <machine_id> <script_id> <br />
-!machine_status <machine_id> <br />
-pip install -r requirements.txt <br />
+!list_scripts                               <br />
+!register_script <nome> <conteúdo>          <br />
+!execute_script <machine_id> <script_name>  <br />
+!check_result <command_id>                  <br />
+!list_machines                              <br />
+
 <br />
 -Executando o Agente<br />
 .Execução manual<br />
