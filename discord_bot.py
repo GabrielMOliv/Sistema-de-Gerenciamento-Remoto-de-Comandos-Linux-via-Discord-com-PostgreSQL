@@ -62,21 +62,37 @@ async def execute_script(ctx, machine_id:str, script_name:str):
     Executa um script em uma máquina específica usando seu ID.
     O Bot não precisa mais buscar a lista de máquinas.
     """
-    # 1. Prepara o payload diretamente com o ID e o nome do script
-    payload = {"machine_id":machine_id, "script_name":script_name}
+    payload = {"machine_id": machine_id, "script_name": script_name}
+    
+    # Adicionando tratamento de erros de conexão/timeout
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{SERVER_URL}/execute", json=payload) as resp:
+                
+                # Tenta decodificar o JSON (pode falhar se o corpo estiver vazio ou não for JSON)
+                try:
+                    data = await resp.json()
+                except aiohttp.ContentTypeError:
+                    data = None # Nenhuma data JSON para processar
 
-    # 2. Envia a requisição de execução para o servidor
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{SERVER_URL}/execute", json=payload) as resp:
-            data = await resp.json()
-
-            if resp.status == 200:
-                # Sucesso
-                await ctx.send(f"{data['message']}")
-            else:
-                # Erro (ex: Máquina ou script não encontrado)
-                error_detail = data.get('detail', 'Erro desconhecido na execução.')
-                await ctx.send(f" Falha na execução: {error_detail}")
+                if resp.status == 200:
+                     # Sucesso
+                    # Usa a mensagem do servidor, ou uma mensagem padrão se não houver JSON
+                    message = data.get('message', 'Comando executado com sucesso.') if data else 'Comando executado com sucesso (sem resposta JSON detalhada).'
+                    await ctx.send(f"✅ {message}")
+                else:
+                    # Erro HTTP retornado pelo servidor
+                    if data:
+                        error_detail = data.get('detail', f'Erro desconhecido (Status: {resp.status}).')
+                    else:
+                        error_detail = f"O servidor retornou um erro HTTP {resp.status} e o corpo da resposta estava vazio ou não era JSON."
+                        
+                    await ctx.send(f"Falha na execução: {error_detail}")
+                    
+    except aiohttp.ClientConnectorError:
+        await ctx.send("Erro de conexão com o servidor. Verifique se o `SERVER_URL` está correto e o servidor online.")
+    except Exception as e:
+        await ctx.send(f"Ocorreu um erro inesperado: {e}")
 
 @bot.event
 async def on_ready():

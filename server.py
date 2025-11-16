@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer, Text, ForeignKey
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, ForeignKey, func
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
+from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
 import os
 
@@ -39,7 +40,7 @@ def get_db():
         # Garante que a sessão é fechada, mesmo que ocorra um erro no endpoint.
         db.close()
 
-# ----------------- MODELOS (SEM MUDANÇA) -----------------
+# -----------------MODELOS-----------------
 class Machine(Base):
     __tablename__ = "machines"
     id = Column(String, primary_key=True)
@@ -58,10 +59,12 @@ class Command(Base):
     script_name = Column(String, ForeignKey("scripts.name"))
     status = Column(String, default="pending")
     output = Column(Text, default="")
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
     machine = relationship("Machine")
     script = relationship("Script")
 
-# ... (Seus Pydantic Models não foram alterados) ...
 class MachineRegister(BaseModel):
     id: str
     name: str
@@ -77,7 +80,7 @@ class ExecuteRequest(BaseModel):
 class CommandResult(BaseModel):
     output: str
 
-# ---------- ENDPOINTS (USANDO DEPENDS) ----------
+# ----------ENDPOINTS----------
 
 @app.get("/machines")
 def list_machines(db: Session = Depends(get_db)):
@@ -108,21 +111,45 @@ def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
 
 @app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
-    # Certifique-se que o ID da Máquina está sendo lido corretamente
-    machine = db.query(Machine).filter_by(id=data.id).first()
+# 1. Busca pela Máquina e Script
+    machine = db.query(Machine).filter_by(id=data.machine_id).first()
+    script = db.query(Script).filter(func.lower(Script.name) == func.lower(data.script_name)).first()
     
-    # Busca do Script (Voltamos ao original)
-    script = db.query(Script).filter_by(name=data.name).first()
-    
+    # Se máquina ou script não forem encontrados, retorna 404 (com JSON)
     if not machine or not script:
-        # Este erro é disparado!
         raise HTTPException(status_code=404, detail="Machine or script not found")
         
-    # Resto do código (cria o comando, commita e retorna sucesso)
-    cmd = Command(machine_id=machine.id, script_name=script.name)
-    db.add(cmd)
-    db.commit()
-    return {"status": "ok", "message": f"Command created for {machine.name}"}
+    # 2. Criação do Comando e Inserção no DB (Bloco crítico com tratamento de erro)
+    try:
+        # 2a. Instancia o objeto (created_at é preenchido automaticamente)
+        cmd = Command(machine_id=machine.id, script_name=script.name)
+        
+        # 2b. Adiciona e tenta commit
+        db.add(cmd)
+        db.commit()
+        
+        # 3. Sucesso
+        return {"status": "ok", "message": f"Command created for {machine.name}"}
+
+    except SQLAlchemyError as e:
+        # Captura erros de DB (ex: constraint violation)
+        db.rollback() 
+        print(f"DATABASE ERROR during execute_script: {e}")
+        
+        # Retorna 500 COM corpo JSON (tratável pelo Discord bot)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Database integrity error during command creation. Check server logs for details. Original Error: {e.orig}"
+        )
+    except Exception as e:
+        # Captura outros erros inesperados
+        db.rollback()
+        print(f"UNEXPECTED ERROR during execute_script: {e}")
+        
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An unexpected server error occurred: {e}"
+        )
 
 
 @app.get("/commands/{machine_id}")
