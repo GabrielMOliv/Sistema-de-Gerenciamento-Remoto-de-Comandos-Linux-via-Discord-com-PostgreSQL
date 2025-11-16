@@ -2,7 +2,8 @@ import os
 import time
 import uuid
 import requests
-import subprocess
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
 
 #Variáveis do ambiente 
@@ -12,8 +13,11 @@ MACHINE_NAME = os.getenv("MACHINE_NAME", "maquina1")
 MACHINE_ID = os.getenv("MACHINE_ID", str(uuid.uuid4()))  #se não existir, gera UUID único
 PING_INTERVAL = 300  # 5 minutos
 
-#Função para registrar máquina e enviar ping
-def ping_server():
+
+async def ping_server(session: aiohttp.ClientSession):
+    """
+    Envia ping ao servidor, registrando máquina ativa.
+    """
     payload = {"id": MACHINE_ID, "name": MACHINE_NAME}
     try:
         r = requests.post(f"{SERVER_URL}/register_machine", json=payload)
@@ -24,8 +28,10 @@ def ping_server():
     except Exception as e:
         print(f"[PING] Erro na requisição: {e}")
 
-#Função para buscar comandos pendentes
-def get_commands():
+async def get_commands(session: aiohttp.ClientSession):
+    """
+    Busca comandos pendentes para esta máquina.
+    """
     try:
         r = requests.get(f"{SERVER_URL}/commands/{MACHINE_ID}")
         if r.status_code == 200:
@@ -36,34 +42,63 @@ def get_commands():
         print(f"[COMMANDS] Erro na requisição: {e}")
     return []
 
-#Executa comando e envia resultado
-def execute_command(command):
-    command_id = command['id']
-    script_name = command['script_name']
-    content = command['content']
+async def execute_command(session: aiohttp.ClientSession, command):
+    """
+    Executa um comando no shell e envia o resultado ao servidor.
+    """
+    command_id = command["id"]
+    content = command["content"]
 
+    print(f"[EXEC] Executando comando {command_id}: {content}")
+
+    # Executa comando de forma assíncrona
     try:
-        # Executa comando no shell
-        result = subprocess.run(content, shell=True, capture_output=True, text=True, timeout=300)
-        output = result.stdout + "\n" + result.stderr
+        proc = await asyncio.create_subprocess_shell(
+            content,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await proc.communicate()
+        output = (stdout.decode() if stdout else "") + "\n" + (stderr.decode() if stderr else "")
+
     except Exception as e:
         output = f"Erro ao executar comando: {e}"
 
-    # Envia saída ao servidor
+    # Envia resultado ao servidor
     try:
-        r = requests.post(f"{SERVER_URL}/commands/{command_id}/result", json={"output": output})
-        if r.status_code in (200, 201):
-            print(f"[RESULT] Resultado enviado para comando {command_id}")
-        else:
-            print(f"[RESULT] Erro ao enviar resultado: {r.status_code}")
+        async with session.post(
+            f"{SERVER_URL}/commands/{command_id}/result",
+            json={"output": output}
+        ) as resp:
+            if resp.status in (200, 201):
+                print(f"[RESULT] Resultado enviado para comando {command_id}")
+            else:
+                print(f"[RESULT] Erro ao enviar resultado: {resp.status}")
     except Exception as e:
         print(f"[RESULT] Erro na requisição: {e}")
 
-#Loop principal
+
+async def main():
+    """
+    Loop principal do agente.
+    """
+    async with aiohttp.ClientSession() as session:
+        while True:
+            # 1. Ping no servidor
+            await ping_server(session)
+
+            # 2. Buscar comandos pendentes
+            commands = await get_commands(session)
+
+            # 3. Executar comandos recebidos
+            for cmd in commands:
+                await execute_command(session, cmd)
+
+            # 4. Esperar 5 min
+            print(f"[SLEEP] Aguardando {PING_INTERVAL} segundos...\n")
+            await asyncio.sleep(PING_INTERVAL)
+
+
 if __name__ == "__main__":
-    while True:
-        ping_server()
-        commands = get_commands()
-        for cmd in commands:
-            execute_command(cmd)
-        time.sleep(PING_INTERVAL)
+    asyncio.run(main())

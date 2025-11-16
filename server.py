@@ -65,6 +65,8 @@ class Command(Base):
     machine = relationship("Machine")
     script = relationship("Script")
 
+
+#modelos Pydantic
 class MachineRegister(BaseModel):
     id: str
     name: str
@@ -80,13 +82,18 @@ class ExecuteRequest(BaseModel):
 class CommandResult(BaseModel):
     output: str
 
-# ----------ENDPOINTS----------
 
+
+# ----------ENDPOINTS----------
 @app.get("/machines")
 def list_machines(db: Session = Depends(get_db)):
     five_minutes_ago = int(datetime.utcnow().timestamp()) - 300
     machines = db.query(Machine).filter(Machine.last_seen >= five_minutes_ago).all()
-    return [{"id": m.id, "name": m.name, "last_seen": m.last_seen} for m in machines]
+    return [
+        {"id": m.id, "name": m.name, "last_seen": m.last_seen} 
+        for m in machines
+    ]
+
 
 @app.post("/register_machine")
 def register_machine(data: MachineRegister, db: Session = Depends(get_db)):
@@ -100,14 +107,18 @@ def register_machine(data: MachineRegister, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok", "message": f"Machine {data.name} registered"}
 
+
 @app.post("/scripts")
 def register_script(data: ScriptRegister, db: Session = Depends(get_db)):
     script = db.query(Script).filter_by(name=data.name).first()
     if script:
         raise HTTPException(status_code=400, detail="Script name already exists")
+    
     db.add(Script(name=data.name, content=data.content))
     db.commit()
+
     return {"status": "ok", "message": f"Script {data.name} registered"}
+
 
 @app.post("/execute")
 def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
@@ -127,56 +138,63 @@ def execute_script(data: ExecuteRequest, db: Session = Depends(get_db)):
         # 2b. Adiciona e tenta commit
         db.add(cmd)
         db.commit()
+        db.refresh(cmd)
         
         # 3. Sucesso
-        return {"status": "ok", "message": f"Command created for {machine.name}"}
+        return {
+            "status": "ok", 
+            "message": f"Command created for {machine.name}",
+            "command_id": cmd.id
+        }
 
-    except SQLAlchemyError as e:
-        # Captura erros de DB (ex: constraint violation)
-        db.rollback() 
-        print(f"DATABASE ERROR during execute_script: {e}")
-        
-        # Retorna 500 COM corpo JSON (tratável pelo Discord bot)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Database integrity error during command creation. Check server logs for details. Original Error: {e.orig}"
-        )
     except Exception as e:
-        # Captura outros erros inesperados
         db.rollback()
-        print(f"UNEXPECTED ERROR during execute_script: {e}")
-        
-        raise HTTPException(
-            status_code=500, 
-            detail=f"An unexpected server error occurred: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 
-@app.get("/commands/{machine_id}")
+#ENDPOINT QUE O DISCORD BOT PRECISA PARA check_result
+@app.get("/commands/{command_id}")
+def get_command_status(command_id: int, db: Session = Depends(get_db)):
+    cmd = db.query(Command).filter_by(id=command_id).first()
+
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Command not found")
+
+    return {
+        "id": cmd.id,
+        "machine_id": cmd.machine_id,
+        "script_name": cmd.script_name,
+        "status": cmd.status,
+        "output": cmd.output,
+        "created_at": str(cmd.created_at)
+    }
+
+# ENDPOINT QUE O AGENTE USA PARA PEGAR COMANDOS PENDENTES
+@app.get("/commands/pending/{machine_id}")
 def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
     # Faz um JOIN entre Command e Script para obter o conteúdo (content)
-    cmds = db.query(
-        Command.id, 
-        Command.script_name, 
-        Script.content
-    ).join(
-        Script, Command.script_name == Script.name
-    ).filter(
-        Command.machine_id == machine_id, 
-        Command.status == "pending"
-    ).all()
-    
+    cmds = (
+        db.query(Command.id, Command.script_name, Script.content)
+        .join(Script, Command.script_name == Script.name)
+        .filter(Command.machine_id == machine_id, Command.status == "pending")
+        .all()
+    )
+
     return [
-        {"id": c.id, "script_name": c.script_name, "content": c.content} 
+        {"id": c.id, "script_name": c.script_name, "content": c.content}
         for c in cmds
     ]
 
+# ENDPOINT PARA O AGENTE REPORTAR RESULTADO
 @app.post("/commands/{command_id}/result")
 def post_command_result(command_id: int, result: CommandResult, db: Session = Depends(get_db)):
     cmd = db.query(Command).filter_by(id=command_id).first()
+    
     if not cmd:
         raise HTTPException(status_code=404, detail="Command not found")
+    
     cmd.status = "completed"
     cmd.output = result.output
     db.commit()
+
     return {"status": "ok", "message": "Result saved"}
