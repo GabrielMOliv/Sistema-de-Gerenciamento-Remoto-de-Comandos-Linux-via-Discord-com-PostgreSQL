@@ -1,6 +1,6 @@
 import os
 from sqlalchemy import create_engine
-from server import Base
+from server.server import Base
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

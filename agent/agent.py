@@ -33,7 +33,7 @@ async def get_commands(session: aiohttp.ClientSession):
     Busca comandos pendentes para esta máquina.
     """
     try:
-        r = requests.get(f"{SERVER_URL}/commands/{MACHINE_ID}")
+        r = requests.get(f"{SERVER_URL}/commands/pending/{MACHINE_ID}")
         if r.status_code == 200:
             return r.json()  # lista de comandos
         else:

@@ -174,6 +174,7 @@ def list_scripts(db: Session = Depends(get_db)):
     scripts = db.query(Script).all()
     return [{"name": s.name, "content": s.content} for s in scripts]
 
+
 # ENDPOINT QUE O AGENTE USA PARA PEGAR COMANDOS PENDENTES
 @app.get("/commands/pending/{machine_id}")
 def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
