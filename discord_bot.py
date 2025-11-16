@@ -49,6 +49,25 @@ async def list_machines(ctx):
 
             await ctx.send(msg)
 
+@bot.command()
+@is_authorized()
+async def list_scripts(ctx):
+    """Lista todos os scripts cadastrados no servidor."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{SERVER_URL}/scripts") as resp:
+            if resp.status != 200:
+                return await ctx.send(f"Erro ao consultar scripts ({resp.status}).")
+
+            scripts = await resp.json()
+            if not scripts:
+                return await ctx.send("Nenhum script registrado.")
+
+            msg = "Scripts Registrados:\n"
+            for s in scripts:
+                msg += f"- **{s['name']}** → `{s['content']}`\n"
+
+            await ctx.send(msg)
+
 
 @bot.command()
 @is_authorized()

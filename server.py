@@ -169,6 +169,11 @@ def get_command_status(command_id: int, db: Session = Depends(get_db)):
         "created_at": str(cmd.created_at)
     }
 
+@app.get("/scripts")
+def list_scripts(db: Session = Depends(get_db)):
+    scripts = db.query(Script).all()
+    return [{"name": s.name, "content": s.content} for s in scripts]
+
 # ENDPOINT QUE O AGENTE USA PARA PEGAR COMANDOS PENDENTES
 @app.get("/commands/pending/{machine_id}")
 def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
@@ -189,7 +194,7 @@ def get_pending_commands(machine_id: str, db: Session = Depends(get_db)):
 @app.post("/commands/{command_id}/result")
 def post_command_result(command_id: int, result: CommandResult, db: Session = Depends(get_db)):
     cmd = db.query(Command).filter_by(id=command_id).first()
-    
+
     if not cmd:
         raise HTTPException(status_code=404, detail="Command not found")
     
