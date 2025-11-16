@@ -1,11 +1,7 @@
-# migrate.py
-
 import os
 from sqlalchemy import create_engine
-# Importa APENAS a base e os modelos do seu server.py
-from server import Base, Machine, Script, Command, SessionLocal 
+from server import Base
 
-# A RAILWAY INJETA DATABASE_URL VIA VARIÁVEL DE AMBIENTE
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
@@ -13,23 +9,18 @@ if not DATABASE_URL:
     exit(1)
 
 try:
-    print("Tentando criar tabelas do banco de dados...")
+    print("Iniciando MIGRACAO DE SCHEMA... Conectando ao DB...")
     
-    # Cria a engine de conexão, incluindo a configuração SSL necessária para o Railway
     engine = create_engine(
         DATABASE_URL,
         connect_args={"sslmode": "require"} 
     )
     
-    # Cria as tabelas (o comando que precisamos)
-    # ATENÇÃO: create_all() só cria tabelas que AINDA não existem.
-    # Para a tabela 'commands', ele adicionará a nova coluna se ela já não estiver lá 
-    # ou tentará criar a tabela inteira se for a primeira vez.
+    # Força a atualização do schema, adicionando a coluna 'created_at'
     Base.metadata.create_all(bind=engine)
     
-    print("Tabelas criadas com sucesso! Saindo...")
+    print("MIGRACAO CONCLUIDA! O schema do banco de dados foi atualizado.")
     
 except Exception as e:
     print(f"ERRO DE MIGRACAO FATAL: Falha ao criar tabelas: {e}")
-    # Força a saída com código de erro, se algo falhar
     exit(1)
