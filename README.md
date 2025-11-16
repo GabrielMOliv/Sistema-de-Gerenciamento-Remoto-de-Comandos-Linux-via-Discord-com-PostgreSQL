@@ -9,13 +9,13 @@ O sistema é composto por três partes principais:
 <br />
 O servidor gerencia máquinas, scripts e comandos.
 O bot envia comandos ao servidor.
-O agente recebe comandos e executa os scripts localmente.
+O agente recebe comandos e executa os scripts localmente.<br />
 <br />
--Configuração do Ambiente
-1. Criar arquivo .env
+-Configuração do Ambiente<br />
+1. Criar arquivo .env<br />
 <br />
-Copie o modelo:
-cp .env.example .env
+Copie o modelo:<br />
+cp .env.example .env<br />
 <br />
 Preencha as variáveis necessárias no .env, como:<br />
 DATABASE_URL=...<br />
